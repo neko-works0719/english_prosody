@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理者画面 - 英語リズム学習支援ツール</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-row">
+      <div>
+        <h1>管理者画面(例文管理)</h1>
+        <p class="subtitle">例文の追加・編集・削除、モデル音声(録音)の登録ができます</p>
+      </div>
+      <a class="admin-link" href="index.html">← 学生用画面へ</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel" id="admin-login-panel">
+      <h2>管理者ログイン</h2>
+      <div class="row">
+        <input type="password" id="admin-password" placeholder="管理者パスワード">
+        <button id="login-btn" type="button">ログイン</button>
+      </div>
+      <div id="login-status" class="status-msg"></div>
+    </section>
+
+    <div id="admin-content" hidden>
+      <div class="admin-layout">
+        <section class="panel" id="sentence-list-panel">
+          <h2>例文一覧</h2>
+          <ul id="sentence-list" class="sentence-list"></ul>
+          <button id="new-sentence-btn" type="button">＋ 新規例文を追加</button>
+        </section>
+
+        <section class="panel" id="sentence-edit-panel">
+          <h2 id="edit-panel-title">例文を編集</h2>
+
+          <label class="field-label" for="edit-id">例文ID(半角英数字・ハイフン・アンダースコアのみ、新規時のみ入力可)</label>
+          <input type="text" id="edit-id" class="wide" placeholder="例: s16" maxlength="64">
+
+          <label class="field-label" for="edit-text">例文(表示用テキスト)</label>
+          <input type="text" id="edit-text" class="wide" placeholder="例: I can speak English." maxlength="500">
+
+          <label class="field-label">単語一覧(内容語/機能語、強形/弱形IPA、補足)</label>
+          <div id="word-editor-rows"></div>
+          <button id="add-word-btn" type="button" class="secondary-btn">＋ 単語を追加</button>
+
+          <div class="row" style="margin-top:1rem;">
+            <button id="save-sentence-btn" type="button">保存する</button>
+            <button id="delete-sentence-btn" type="button" class="danger-btn" hidden>この例文を削除</button>
+          </div>
+          <div id="edit-status" class="status-msg"></div>
+
+          <hr style="margin:1.2rem 0; border:none; border-top:1px solid var(--border);">
+
+          <h2>モデル音声(録音)</h2>
+          <p class="hint">録音済み音声を登録すると、学生画面の「モデル音声を再生」でブラウザTTSの代わりに再生されます。未登録の例文はTTSが使われます。</p>
+          <div id="current-audio-row" class="row"></div>
+          <div class="recorder-row">
+            <button id="record-audio-btn" type="button" disabled>● 録音開始</button>
+            <span id="record-audio-status" class="hint">例文を保存してから録音できます</span>
+          </div>
+          <div id="audio-preview-row" class="row"></div>
+          <div id="audio-status" class="status-msg"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="admin.js"></script>
+</body>
+</html>

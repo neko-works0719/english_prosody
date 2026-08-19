@@ -4,3 +4,4 @@ __pycache__/
 venv/
 prosody/backend/prosody.db
 prosody/backend/prosody.db-*
+prosody/backend/media/

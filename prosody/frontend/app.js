@@ -19,6 +19,7 @@
     submitStatus: document.getElementById("submit-status"),
   };
 
+  let SENTENCES = [];
   let currentSentence = null;
   let amplitudeData = []; // [{t, rms}]
   let recognizedText = "";
@@ -32,6 +33,12 @@
   }
 
   // ---- 例文選択・表示 ----
+  async function fetchSentences() {
+    const res = await fetch("/api/sentences");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   function populateSentenceSelect() {
     SENTENCES.forEach((s) => {
       const opt = document.createElement("option");
@@ -109,9 +116,14 @@
     updateSubmitState();
   }
 
-  // ---- モデル音声(TTS) ----
+  // ---- モデル音声(録音済み音声があればそれを再生、なければTTSにフォールバック) ----
   function playModelAudio() {
-    if (!currentSentence || !window.speechSynthesis) return;
+    if (!currentSentence) return;
+    if (currentSentence.audio_url) {
+      new Audio(currentSentence.audio_url).play();
+      return;
+    }
+    if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(currentSentence.text);
     utter.lang = "en-US";
@@ -380,6 +392,19 @@
   els.studentId.addEventListener("input", updateSubmitState);
 
   // ---- 初期化 ----
-  populateSentenceSelect();
-  loadSentence(SENTENCES[0].id);
+  async function init() {
+    try {
+      SENTENCES = await fetchSentences();
+    } catch (err) {
+      els.prosodyDisplay.textContent = "例文の読み込みに失敗しました: " + err.message;
+      return;
+    }
+    if (SENTENCES.length === 0) {
+      els.prosodyDisplay.textContent = "例文が登録されていません。管理者画面で例文を追加してください。";
+      return;
+    }
+    populateSentenceSelect();
+    loadSentence(SENTENCES[0].id);
+  }
+  init();
 })();
