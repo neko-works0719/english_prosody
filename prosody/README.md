@@ -66,6 +66,23 @@ GET /api/submissions?sentence_id=s01
 `frontend/sentences.js` の `SENTENCES` 配列を編集してください。1文につき単語ごとに
 `{ text, type: "content" | "function", ipaStrong, ipaWeak, note }` を指定します(`ipaWeak` がある単語のみ強形/弱形の対比表示が出ます)。
 
+## Renderへのデプロイ
+
+リポジトリルートの `render.yaml` を使って [Render](https://render.com/) にデプロイできます。
+
+1. RenderでGitHubリポジトリを接続し、「Blueprint」からこのリポジトリを選択する
+   (`render.yaml` が自動検出されます)。
+2. デプロイ完了後、発行されたURL(`https://<service>.onrender.com/`)を**Google Chrome**で開く。
+
+### 注意事項(本番運用前に必ず確認)
+
+- **DBの永続化**: Renderの無料プランはファイルシステムが一時的で、再デプロイ・再起動のたびに
+  `prosody.db` が消えます。データを残す場合はRenderの永続ディスク(有料)を追加するか、
+  PostgreSQL等の外部DBに切り替えてください。
+- **`/api/submissions` (GET) は認証なし**です。Renderにデプロイすると誰でもアクセスできる
+  URLになるため、学外公開する場合は簡易Basic認証などのアクセス制御を追加することを強く推奨します。
+- HTTPS化はRenderが自動で行います(要件定義5節の要件を満たします)。
+
 ## 未対応・今後の課題(要件定義 3.2/3.3/3.4 節を参照)
 
 - 教員用ダッシュボード、例文編集UI、ピッチ解析、CSVエクスポート等は Phase 2/3 で対応。

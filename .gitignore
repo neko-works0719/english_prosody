@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+prosody/backend/prosody.db
+prosody/backend/prosody.db-*
