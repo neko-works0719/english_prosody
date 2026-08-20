@@ -15,7 +15,6 @@
     wordSegments: document.getElementById("word-segments"),
     recognizedText: document.getElementById("recognized-text"),
     feedbackList: document.getElementById("feedback-list"),
-    submitBtn: document.getElementById("submit-btn"),
     submitStatus: document.getElementById("submit-status"),
   };
 
@@ -113,7 +112,8 @@
     els.recognizedText.textContent = "";
     els.feedbackList.innerHTML = "";
     els.recordStatus.textContent = "未録音";
-    updateSubmitState();
+    els.submitStatus.className = "hint";
+    els.submitStatus.textContent = "";
   }
 
   // ---- モデル音声(録音済み音声があればそれを再生、なければTTSにフォールバック) ----
@@ -233,7 +233,7 @@
     setTimeout(() => {
       els.recognizedText.textContent = recognizedText || "(認識結果なし)";
       renderFeedback(currentSentence, recognizedText);
-      updateSubmitState();
+      submitResult();
     }, 400);
   }
 
@@ -344,16 +344,14 @@
     });
   }
 
-  // ---- 送信 ----
-  function updateSubmitState() {
-    const hasData = amplitudeData.length > 0 && currentSentence && els.studentId.value.trim();
-    els.submitBtn.disabled = !hasData;
-  }
-
+  // ---- 送信(録音完了時に自動実行) ----
   async function submitResult() {
     if (!currentSentence || amplitudeData.length === 0) return;
+    const studentId = els.studentId.value.trim();
+    if (!studentId) return;
+
     const payload = {
-      student_id: els.studentId.value.trim(),
+      student_id: studentId,
       sentence_id: currentSentence.id,
       sample_interval_ms: SAMPLE_INTERVAL_MS,
       amplitude: amplitudeData,
@@ -361,7 +359,6 @@
       timestamp: new Date().toISOString(),
     };
 
-    els.submitBtn.disabled = true;
     els.submitStatus.className = "hint";
     els.submitStatus.textContent = "送信中...";
 
@@ -380,7 +377,6 @@
     } catch (err) {
       els.submitStatus.className = "error";
       els.submitStatus.textContent = "送信に失敗しました: " + err.message;
-      els.submitBtn.disabled = false;
     }
   }
 
@@ -388,8 +384,6 @@
   els.sentenceSelect.addEventListener("change", (e) => loadSentence(e.target.value));
   els.playModelBtn.addEventListener("click", playModelAudio);
   els.recordBtn.addEventListener("click", toggleRecording);
-  els.submitBtn.addEventListener("click", submitResult);
-  els.studentId.addEventListener("input", updateSubmitState);
 
   // ---- 初期化 ----
   async function init() {
