@@ -291,3 +291,18 @@ textarea, input[type="text"].wide {
 .danger-btn:hover:not(:disabled) { background: #a11f1f; }
 .secondary-btn { background: #6c7683; }
 .secondary-btn:hover:not(:disabled) { background: #5a6270; }
+
+/* ---- 発音診断(ベータ) ---- */
+.pron-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  padding: .8rem 0;
+  font-size: .9rem;
+}
+.pron-score-item strong { font-size: 1.2rem; color: #17325c; }
+
+.pron-word-ok { background: #e8f5e9; color: #2e7d32; }
+.pron-word-omission { background: #e8f0fe; color: #1a4d8f; }
+.pron-word-mispronunciation { background: #fdecea; color: #c62828; }
+.pron-word-insertion { background: #fff3cd; color: #7a5b00; }

@@ -62,6 +62,17 @@
       <p class="hint">録音が完了すると、匿名ID・例文ID・音量カーブの数値データ・音声認識テキストが自動的にサーバーへ送信されます。音声そのものは保存されません。</p>
       <div id="submit-status" class="hint"></div>
     </section>
+
+    <section class="panel" id="pronunciation-panel" hidden>
+      <h2>発音診断(ベータ)</h2>
+      <p class="hint">
+        ネイティブの発音との違いや、リンキング(連結)によって単語が聞こえなくなっている可能性がある箇所をAIが判定します。
+        この機能を使うと、録音した音声そのものが発音評価サービスに送信されます(保存はされません)。
+      </p>
+      <div id="pronunciation-status" class="hint"></div>
+      <div id="pronunciation-overall"></div>
+      <ul id="pronunciation-words" class="feedback-list"></ul>
+    </section>
   </main>
 
   <script src="app.js"></script>

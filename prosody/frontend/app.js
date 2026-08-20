@@ -16,6 +16,10 @@
     recognizedText: document.getElementById("recognized-text"),
     feedbackList: document.getElementById("feedback-list"),
     submitStatus: document.getElementById("submit-status"),
+    pronunciationPanel: document.getElementById("pronunciation-panel"),
+    pronunciationStatus: document.getElementById("pronunciation-status"),
+    pronunciationOverall: document.getElementById("pronunciation-overall"),
+    pronunciationWords: document.getElementById("pronunciation-words"),
   };
 
   let SENTENCES = [];
@@ -23,6 +27,7 @@
   let amplitudeData = []; // [{t, rms}]
   let recognizedText = "";
   let lastResult = null; // payload ready to submit
+  let pronunciationAssessmentEnabled = false;
 
   // ---- ブラウザ対応チェック ----
   const isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|OPR/.test(navigator.userAgent);
@@ -114,6 +119,11 @@
     els.recordStatus.textContent = "未録音";
     els.submitStatus.className = "hint";
     els.submitStatus.textContent = "";
+    if (pronunciationAssessmentEnabled) {
+      els.pronunciationStatus.textContent = "";
+      els.pronunciationOverall.innerHTML = "";
+      els.pronunciationWords.innerHTML = "";
+    }
   }
 
   // ---- モデル音声(録音済み音声があればそれを再生、なければTTSにフォールバック) ----
@@ -141,6 +151,12 @@
   let lastSampleTime = 0;
   let recognition = null;
 
+  // 発音評価(有効時のみ)用の生PCMキャプチャ
+  let pcmProcessor = null;
+  let pcmSilentGain = null;
+  let pcmChunks = [];
+  let pcmSampleRate = 0;
+
   async function startRecording() {
     if (!currentSentence) return;
     try {
@@ -155,6 +171,20 @@
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 2048;
     source.connect(analyser);
+
+    if (pronunciationAssessmentEnabled) {
+      pcmChunks = [];
+      pcmSampleRate = audioContext.sampleRate;
+      pcmProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      pcmSilentGain = audioContext.createGain();
+      pcmSilentGain.gain.value = 0; // マイク音声をスピーカーに戻さないためのミュート
+      pcmProcessor.onaudioprocess = (e) => {
+        pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(pcmProcessor);
+      pcmProcessor.connect(pcmSilentGain);
+      pcmSilentGain.connect(audioContext.destination);
+    }
 
     amplitudeData = [];
     recognizedText = "";
@@ -213,6 +243,19 @@
   function stopRecording() {
     recording = false;
     if (rafId) cancelAnimationFrame(rafId);
+
+    let pcmForAssessment = null;
+    let pcmRateForAssessment = 0;
+    if (pcmProcessor) {
+      pcmProcessor.disconnect();
+      pcmSilentGain.disconnect();
+      pcmForAssessment = pcmChunks;
+      pcmRateForAssessment = pcmSampleRate;
+      pcmProcessor = null;
+      pcmSilentGain = null;
+      pcmChunks = [];
+    }
+
     if (mediaStream) {
       mediaStream.getTracks().forEach((t) => t.stop());
       mediaStream = null;
@@ -234,6 +277,9 @@
       els.recognizedText.textContent = recognizedText || "(認識結果なし)";
       renderFeedback(currentSentence, recognizedText);
       submitResult();
+      if (pronunciationAssessmentEnabled && pcmForAssessment && pcmForAssessment.length > 0) {
+        runPronunciationAssessment(pcmForAssessment, pcmRateForAssessment);
+      }
     }, 400);
   }
 
@@ -380,6 +426,137 @@
     }
   }
 
+  // ---- 発音評価(Azure AI Speech, ベータ機能。有効時のみ) ----
+  function downsampleTo16k(chunks, sourceSampleRate) {
+    let totalLength = 0;
+    chunks.forEach((c) => { totalLength += c.length; });
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    chunks.forEach((c) => { merged.set(c, offset); offset += c.length; });
+
+    const targetSampleRate = 16000;
+    if (sourceSampleRate === targetSampleRate) return merged;
+
+    const ratio = sourceSampleRate / targetSampleRate;
+    const outLength = Math.floor(merged.length / ratio);
+    const out = new Float32Array(outLength);
+    for (let i = 0; i < outLength; i++) {
+      const srcIndex = i * ratio;
+      const i0 = Math.floor(srcIndex);
+      const i1 = Math.min(i0 + 1, merged.length - 1);
+      const frac = srcIndex - i0;
+      out[i] = merged[i0] * (1 - frac) + merged[i1] * frac;
+    }
+    return out;
+  }
+
+  function encodeWav16kMono(chunks, sourceSampleRate) {
+    const samples = downsampleTo16k(chunks, sourceSampleRate);
+    const sampleRate = 16000;
+    const bytesPerSample = 2;
+    const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    const view = new DataView(buffer);
+
+    function writeString(offset, str) {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    }
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * bytesPerSample, true);
+    view.setUint16(32, bytesPerSample, true);
+    view.setUint16(34, 16, true); // bits per sample
+    writeString(36, "data");
+    view.setUint32(40, samples.length * bytesPerSample, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  function scoreLabel(score) {
+    if (score === null || score === undefined) return "-";
+    return Math.round(score);
+  }
+
+  function renderPronunciationResult(result) {
+    els.pronunciationOverall.innerHTML = "";
+    els.pronunciationWords.innerHTML = "";
+
+    if (!result.recognized || !result.overall) {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = "発話を認識できませんでした。もう一度録音してみてください。";
+      els.pronunciationOverall.appendChild(p);
+      return;
+    }
+
+    const o = result.overall;
+    const summary = document.createElement("div");
+    summary.className = "pron-score-row";
+    summary.innerHTML = `
+      <span class="pron-score-item">総合 <strong>${scoreLabel(o.pron_score)}</strong>/100</span>
+      <span class="pron-score-item">正確さ <strong>${scoreLabel(o.accuracy_score)}</strong>/100</span>
+      <span class="pron-score-item">流暢さ <strong>${scoreLabel(o.fluency_score)}</strong>/100</span>
+      <span class="pron-score-item">完全性 <strong>${scoreLabel(o.completeness_score)}</strong>/100</span>
+    `;
+    els.pronunciationOverall.appendChild(summary);
+
+    result.words.forEach((w) => {
+      const li = document.createElement("li");
+      let cls = "pron-word-ok";
+      if (w.error_type === "Omission") cls = "pron-word-omission";
+      else if (w.error_type === "Mispronunciation") cls = "pron-word-mispronunciation";
+      else if (w.error_type === "Insertion") cls = "pron-word-insertion";
+      else if (typeof w.accuracy_score === "number" && w.accuracy_score < 60) cls = "pron-word-mispronunciation";
+
+      li.className = cls;
+      const scoreText = typeof w.accuracy_score === "number" ? `(${scoreLabel(w.accuracy_score)}点)` : "";
+      li.textContent = `${w.word} ${scoreText}${w.comment ? " — " + w.comment : ""}`;
+      els.pronunciationWords.appendChild(li);
+    });
+  }
+
+  async function runPronunciationAssessment(chunks, sourceSampleRate) {
+    if (!currentSentence) return;
+    els.pronunciationStatus.className = "hint";
+    els.pronunciationStatus.textContent = "発音を解析中...(数秒かかります)";
+    els.pronunciationOverall.innerHTML = "";
+    els.pronunciationWords.innerHTML = "";
+
+    try {
+      const wavBlob = encodeWav16kMono(chunks, sourceSampleRate);
+      const form = new FormData();
+      form.append("file", wavBlob, "speech.wav");
+
+      const res = await fetch(
+        `/api/pronunciation-assessment?sentence_id=${encodeURIComponent(currentSentence.id)}`,
+        { method: "POST", body: form }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const result = await res.json();
+      els.pronunciationStatus.textContent = "";
+      renderPronunciationResult(result);
+    } catch (err) {
+      els.pronunciationStatus.className = "error";
+      els.pronunciationStatus.textContent = "発音評価に失敗しました: " + err.message;
+    }
+  }
+
   // ---- イベント登録 ----
   els.sentenceSelect.addEventListener("change", (e) => loadSentence(e.target.value));
   els.playModelBtn.addEventListener("click", playModelAudio);
@@ -387,6 +564,17 @@
 
   // ---- 初期化 ----
   async function init() {
+    try {
+      const configRes = await fetch("/api/config");
+      if (configRes.ok) {
+        const config = await configRes.json();
+        pronunciationAssessmentEnabled = !!config.pronunciation_assessment_enabled;
+      }
+    } catch (err) {
+      // 取得失敗時は発音評価機能を無効のまま扱う
+    }
+    els.pronunciationPanel.hidden = !pronunciationAssessmentEnabled;
+
     try {
       SENTENCES = await fetchSentences();
     } catch (err) {

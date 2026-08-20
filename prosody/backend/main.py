@@ -6,6 +6,7 @@ SQLiteに保存する。音声データそのものは保存しない(倫理面�
 例文セットもSQLiteで管理し、管理者(教員)が例文の追加・編集・削除、
 および例文ごとのモデル音声(録音)のアップロードを行えるようにする。
 """
+import base64
 import json
 import os
 import secrets
@@ -15,6 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +30,13 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme-admin")
+
+# 発音評価(Azure AI Speech, Pronunciation Assessment)。
+# AZURE_SPEECH_KEY が未設定の間は機能自体を無効化する(倫理審査・同意取得が整うまでは
+# 本番で音声を外部送信しないようにするための安全装置。要件定義3.4節参照)。
+AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
+AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "")
+PRONUNCIATION_ASSESSMENT_ENABLED = bool(AZURE_SPEECH_KEY and AZURE_SPEECH_REGION)
 
 ALLOWED_AUDIO_TYPES = {
     "audio/webm": "webm",
@@ -459,6 +468,126 @@ def delete_sentence_audio(sentence_id: str):
 @app.get("/api/admin/whoami", dependencies=[Depends(require_admin)])
 def admin_whoami():
     return {"status": "ok"}
+
+
+# ---- フロントエンド向け機能フラグ ----
+
+
+@app.get("/api/config")
+def get_config():
+    return {"pronunciation_assessment_enabled": PRONUNCIATION_ASSESSMENT_ENABLED}
+
+
+# ---- 発音評価(Azure AI Speech, ベータ機能) ----
+
+
+async def call_azure_pronunciation_assessment(wav_bytes: bytes, reference_text: str) -> dict:
+    assessment_config = {
+        "ReferenceText": reference_text,
+        "GradingSystem": "HundredMark",
+        "Granularity": "Phoneme",
+        "EnableMiscue": True,
+    }
+    header_value = base64.b64encode(json.dumps(assessment_config).encode("utf-8")).decode("ascii")
+
+    url = (
+        f"https://{AZURE_SPEECH_REGION}.stt.speech.microsoft.com/"
+        "speech/recognition/conversation/cognitiveservices/v1"
+        "?language=en-US&format=detailed"
+    )
+    headers = {
+        "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+        "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+        "Accept": "application/json",
+        "Pronunciation-Assessment": header_value,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(url, headers=headers, content=wav_bytes)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"発音評価サービスへの接続に失敗しました: {exc}",
+        ) from exc
+
+    if res.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"発音評価サービスへの問い合わせに失敗しました(HTTP {res.status_code})",
+        )
+    return res.json()
+
+
+def parse_azure_result(azure_json: dict) -> dict:
+    if azure_json.get("RecognitionStatus") != "Success" or not azure_json.get("NBest"):
+        return {
+            "recognized": False,
+            "recognized_text": azure_json.get("DisplayText", ""),
+            "overall": None,
+            "words": [],
+        }
+
+    best = azure_json["NBest"][0]
+    overall_assessment = best.get("PronunciationAssessment", {})
+
+    words = []
+    for w in best.get("Words", []):
+        pa = w.get("PronunciationAssessment", {})
+        error_type = pa.get("ErrorType", "None")
+        accuracy = pa.get("AccuracyScore")
+
+        comment = None
+        if error_type == "Omission":
+            comment = "この単語が発音されていないと判定されました。前後の単語とリンキング(連結)して発音された可能性があります。"
+        elif error_type == "Insertion":
+            comment = "目標文にない余分な音が挿入されていると判定されました。"
+        elif error_type == "Mispronunciation":
+            comment = "ネイティブの発音と比べて、発音のずれが大きいと判定されました。"
+        elif accuracy is not None and accuracy < 60:
+            comment = "発音の正確さがやや低いと判定されました。"
+
+        words.append(
+            {
+                "word": w.get("Word", ""),
+                "accuracy_score": accuracy,
+                "error_type": error_type,
+                "comment": comment,
+            }
+        )
+
+    return {
+        "recognized": True,
+        "recognized_text": best.get("Lexical", ""),
+        "overall": {
+            "accuracy_score": overall_assessment.get("AccuracyScore"),
+            "fluency_score": overall_assessment.get("FluencyScore"),
+            "completeness_score": overall_assessment.get("CompletenessScore"),
+            "pron_score": overall_assessment.get("PronScore"),
+        },
+        "words": words,
+    }
+
+
+@app.post("/api/pronunciation-assessment")
+async def pronunciation_assessment(sentence_id: str, file: UploadFile):
+    if not PRONUNCIATION_ASSESSMENT_ENABLED:
+        raise HTTPException(status_code=503, detail="発音評価機能は現在無効化されています")
+
+    with get_conn() as conn:
+        row = conn.execute("SELECT text FROM sentences WHERE id = ?", (sentence_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="例文が見つかりません")
+    reference_text = row[0]
+
+    wav_bytes = await file.read()
+    if len(wav_bytes) == 0:
+        raise HTTPException(status_code=400, detail="音声データが空です")
+    if len(wav_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="音声ファイルが大きすぎます(10MBまで)")
+
+    azure_json = await call_azure_pronunciation_assessment(wav_bytes, reference_text)
+    return parse_azure_result(azure_json)
 
 
 # ---- 提出データ API ----
